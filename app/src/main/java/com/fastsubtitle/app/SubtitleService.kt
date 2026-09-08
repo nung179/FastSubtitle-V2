@@ -55,6 +55,8 @@ class SubtitleService : Service() {
 
         private const val CHANNEL_ID = "fast_subtitle"
         private const val NOTIFICATION_ID = 179
+
+        private const val SAMPLE_RATE = 48000
     }
 
     private var projection: MediaProjection? = null
@@ -62,6 +64,7 @@ class SubtitleService : Service() {
     private var webSocket: WebSocket? = null
     private var translator: Translator? = null
 
+    @Volatile
     private var running = false
 
     private lateinit var windowManager: WindowManager
@@ -134,7 +137,7 @@ class SubtitleService : Service() {
                 178
             ) ?: 178
 
-        startForegroundServiceNotification()
+        startNotification()
 
         val resultCode =
             intent?.getIntExtra(
@@ -159,20 +162,19 @@ class SubtitleService : Service() {
         showOverlay()
         prepareTranslator()
 
-        val projectionManager =
+        val manager =
             getSystemService(
                 MEDIA_PROJECTION_SERVICE
             ) as MediaProjectionManager
 
         projection =
-            projectionManager.getMediaProjection(
+            manager.getMediaProjection(
                 resultCode,
                 resultData
             )
 
         projection?.registerCallback(
             object : MediaProjection.Callback() {
-
                 override fun onStop() {
                     shutdown()
                     stopSelf()
@@ -186,7 +188,7 @@ class SubtitleService : Service() {
         return START_STICKY
     }
 
-    private fun startForegroundServiceNotification() {
+    private fun startNotification() {
 
         val notification =
             NotificationCompat.Builder(
@@ -196,25 +198,18 @@ class SubtitleService : Service() {
                 .setSmallIcon(
                     android.R.drawable.ic_btn_speak_now
                 )
-                .setContentTitle(
-                    "Fast Subtitle"
-                )
-                .setContentText(
-                    "Subtitle sedang aktif"
-                )
+                .setContentTitle("Fast Subtitle")
+                .setContentText("Subtitle sedang aktif")
                 .setOngoing(true)
                 .build()
 
         if (Build.VERSION.SDK_INT >= 29) {
-
             startForeground(
                 NOTIFICATION_ID,
                 notification,
                 ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
             )
-
         } else {
-
             startForeground(
                 NOTIFICATION_ID,
                 notification
@@ -226,19 +221,18 @@ class SubtitleService : Service() {
 
         if (Build.VERSION.SDK_INT >= 26) {
 
-            val notificationManager =
+            val manager =
                 getSystemService(
                     NOTIFICATION_SERVICE
                 ) as NotificationManager
 
-            notificationManager
-                .createNotificationChannel(
-                    NotificationChannel(
-                        CHANNEL_ID,
-                        "Fast Subtitle",
-                        NotificationManager.IMPORTANCE_LOW
-                    )
+            manager.createNotificationChannel(
+                NotificationChannel(
+                    CHANNEL_ID,
+                    "Fast Subtitle",
+                    NotificationManager.IMPORTANCE_LOW
                 )
+            )
         }
     }
 
@@ -246,33 +240,20 @@ class SubtitleService : Service() {
 
         val sourceLanguage =
             when (language) {
-
-                "en" ->
-                    TranslateLanguage.ENGLISH
-
-                "ja" ->
-                    TranslateLanguage.JAPANESE
-
-                "ko" ->
-                    TranslateLanguage.KOREAN
-
-                else ->
-                    TranslateLanguage.CHINESE
+                "en" -> TranslateLanguage.ENGLISH
+                "ja" -> TranslateLanguage.JAPANESE
+                "ko" -> TranslateLanguage.KOREAN
+                else -> TranslateLanguage.CHINESE
             }
-
-        val options =
-            TranslatorOptions.Builder()
-                .setSourceLanguage(
-                    sourceLanguage
-                )
-                .setTargetLanguage(
-                    TranslateLanguage.INDONESIAN
-                )
-                .build()
 
         translator =
             Translation.getClient(
-                options
+                TranslatorOptions.Builder()
+                    .setSourceLanguage(sourceLanguage)
+                    .setTargetLanguage(
+                        TranslateLanguage.INDONESIAN
+                    )
+                    .build()
             )
 
         updateOverlay(
@@ -282,13 +263,11 @@ class SubtitleService : Service() {
         translator
             ?.downloadModelIfNeeded()
             ?.addOnSuccessListener {
-
                 updateOverlay(
                     "Mendengarkan…"
                 )
             }
             ?.addOnFailureListener {
-
                 updateOverlay(
                     "Model terjemahan gagal diunduh."
                 )
@@ -298,11 +277,9 @@ class SubtitleService : Service() {
     private fun connectDeepgram() {
 
         if (apiKey.isBlank()) {
-
             updateOverlay(
                 "API Deepgram kosong."
             )
-
             return
         }
 
@@ -311,7 +288,7 @@ class SubtitleService : Service() {
                 "?model=nova-3" +
                 "&language=$language" +
                 "&encoding=linear16" +
-                "&sample_rate=16000" +
+                "&sample_rate=$SAMPLE_RATE" +
                 "&channels=1" +
                 "&interim_results=true" +
                 "&smart_format=true" +
@@ -337,7 +314,6 @@ class SubtitleService : Service() {
                         webSocket: WebSocket,
                         response: Response
                     ) {
-
                         startAudioCapture()
                     }
 
@@ -345,10 +321,7 @@ class SubtitleService : Service() {
                         webSocket: WebSocket,
                         text: String
                     ) {
-
-                        handleDeepgramResult(
-                            text
-                        )
+                        handleDeepgramResult(text)
                     }
 
                     override fun onFailure(
@@ -356,9 +329,8 @@ class SubtitleService : Service() {
                         t: Throwable,
                         response: Response?
                     ) {
-
                         updateOverlay(
-                            "Koneksi subtitle terputus."
+                            "Koneksi Deepgram gagal."
                         )
                     }
                 }
@@ -373,11 +345,9 @@ class SubtitleService : Service() {
                 Manifest.permission.RECORD_AUDIO
             ) != PackageManager.PERMISSION_GRANTED
         ) {
-
             updateOverlay(
                 "Izin audio tidak tersedia."
             )
-
             return
         }
 
@@ -386,9 +356,7 @@ class SubtitleService : Service() {
 
         val captureConfiguration =
             AudioPlaybackCaptureConfiguration
-                .Builder(
-                    mediaProjection
-                )
+                .Builder(mediaProjection)
                 .addMatchingUsage(
                     AudioAttributes.USAGE_MEDIA
                 )
@@ -400,30 +368,43 @@ class SubtitleService : Service() {
                 )
                 .build()
 
+        /*
+         * PENTING:
+         * Android capture tetap 48 kHz STEREO.
+         * Setelah dibaca, stereo kita downmix sendiri menjadi MONO.
+         */
+
         val audioFormat =
             AudioFormat.Builder()
                 .setEncoding(
                     AudioFormat.ENCODING_PCM_16BIT
                 )
                 .setSampleRate(
-                    16000
+                    SAMPLE_RATE
                 )
                 .setChannelMask(
-                    AudioFormat.CHANNEL_IN_MONO
+                    AudioFormat.CHANNEL_IN_STEREO
                 )
                 .build()
 
         val minimumBuffer =
             AudioRecord.getMinBufferSize(
-                16000,
-                AudioFormat.CHANNEL_IN_MONO,
+                SAMPLE_RATE,
+                AudioFormat.CHANNEL_IN_STEREO,
                 AudioFormat.ENCODING_PCM_16BIT
             )
+
+        if (minimumBuffer <= 0) {
+            updateOverlay(
+                "Format audio tidak didukung."
+            )
+            return
+        }
 
         val bufferSize =
             maxOf(
                 minimumBuffer * 2,
-                4096
+                8192
             )
 
         recorder =
@@ -439,7 +420,30 @@ class SubtitleService : Service() {
                 )
                 .build()
 
-        recorder?.startRecording()
+        try {
+
+            recorder?.startRecording()
+
+        } catch (_: Exception) {
+
+            updateOverlay(
+                "Audio internal gagal dibuka."
+            )
+
+            return
+        }
+
+        if (
+            recorder?.recordingState !=
+            AudioRecord.RECORDSTATE_RECORDING
+        ) {
+
+            updateOverlay(
+                "Audio internal tidak aktif."
+            )
+
+            return
+        }
 
         running = true
 
@@ -447,7 +451,7 @@ class SubtitleService : Service() {
             name = "FastSubtitleAudio"
         ) {
 
-            val buffer =
+            val stereoBuffer =
                 ByteArray(
                     bufferSize
                 )
@@ -456,28 +460,97 @@ class SubtitleService : Service() {
 
                 val bytesRead =
                     recorder?.read(
-                        buffer,
+                        stereoBuffer,
                         0,
-                        buffer.size,
+                        stereoBuffer.size,
                         AudioRecord.READ_BLOCKING
                     ) ?: break
 
-                if (bytesRead > 0) {
+                if (bytesRead <= 0) {
+                    continue
+                }
 
-                    val audioBytes =
-                        buffer
-                            .copyOfRange(
-                                0,
-                                bytesRead
-                            )
-                            .toByteString()
+                val monoBuffer =
+                    stereoToMono(
+                        stereoBuffer,
+                        bytesRead
+                    )
+
+                if (monoBuffer.isNotEmpty()) {
 
                     webSocket?.send(
-                        audioBytes
+                        monoBuffer.toByteString()
                     )
                 }
             }
         }
+    }
+
+    /*
+     * PCM16 little-endian stereo:
+     *
+     * L low
+     * L high
+     * R low
+     * R high
+     *
+     * Kita rata-rata L + R menjadi satu sample mono.
+     */
+
+    private fun stereoToMono(
+        stereo: ByteArray,
+        length: Int
+    ): ByteArray {
+
+        val frameCount =
+            length / 4
+
+        if (frameCount <= 0) {
+            return ByteArray(0)
+        }
+
+        val mono =
+            ByteArray(
+                frameCount * 2
+            )
+
+        var sourceIndex = 0
+        var targetIndex = 0
+
+        repeat(frameCount) {
+
+            val left =
+                (
+                    (stereo[sourceIndex].toInt() and 0xFF) or
+                        (stereo[sourceIndex + 1].toInt() shl 8)
+                    ).toShort().toInt()
+
+            val right =
+                (
+                    (stereo[sourceIndex + 2].toInt() and 0xFF) or
+                        (stereo[sourceIndex + 3].toInt() shl 8)
+                    ).toShort().toInt()
+
+            val mixed =
+                ((left + right) / 2)
+                    .coerceIn(
+                        Short.MIN_VALUE.toInt(),
+                        Short.MAX_VALUE.toInt()
+                    )
+
+            mono[targetIndex] =
+                (mixed and 0xFF)
+                    .toByte()
+
+            mono[targetIndex + 1] =
+                ((mixed shr 8) and 0xFF)
+                    .toByte()
+
+            sourceIndex += 4
+            targetIndex += 2
+        }
+
+        return mono
     }
 
     private fun handleDeepgramResult(
@@ -487,14 +560,11 @@ class SubtitleService : Service() {
         try {
 
             val root =
-                JSONObject(
-                    json
-                )
+                JSONObject(json)
 
             if (
-                root.optString(
-                    "type"
-                ) != "Results"
+                root.optString("type") !=
+                "Results"
             ) {
                 return
             }
@@ -517,9 +587,7 @@ class SubtitleService : Service() {
 
             val transcript =
                 alternatives
-                    .getJSONObject(
-                        0
-                    )
+                    .getJSONObject(0)
                     .optString(
                         "transcript"
                     )
@@ -539,6 +607,11 @@ class SubtitleService : Service() {
 
             val now =
                 System.currentTimeMillis()
+
+            /*
+             * Interim jangan diterjemahkan terlalu sering.
+             * Tapi hasil final langsung diproses.
+             */
 
             if (
                 !isFinal &&
@@ -566,13 +639,12 @@ class SubtitleService : Service() {
             translationSequence
                 .incrementAndGet()
 
-        val translationEngine =
+        val engine =
             translator ?: return
 
-        translationEngine
-            .translate(
-                sourceText
-            )
+        engine.translate(
+            sourceText
+        )
             .addOnSuccessListener { translated ->
 
                 if (
@@ -583,13 +655,11 @@ class SubtitleService : Service() {
                 }
 
                 val result =
-                    translated
-                        .trim()
+                    translated.trim()
 
                 if (
                     result.isNotBlank()
                 ) {
-
                     updateOverlay(
                         result
                     )
@@ -619,11 +689,8 @@ class SubtitleService : Service() {
                     if (
                         textColor == "white"
                     ) {
-
                         Color.WHITE
-
                     } else {
-
                         Color.rgb(
                             255,
                             221,
@@ -653,22 +720,20 @@ class SubtitleService : Service() {
                     3
 
                 background =
-                    GradientDrawable()
-                        .apply {
+                    GradientDrawable().apply {
 
-                            setColor(
-                                Color.argb(
-                                    backgroundAlpha,
-                                    0,
-                                    0,
-                                    0
-                                )
+                        setColor(
+                            Color.argb(
+                                backgroundAlpha,
+                                0,
+                                0,
+                                0
                             )
+                        )
 
-                            cornerRadius =
-                                dp(12)
-                                    .toFloat()
-                        }
+                        cornerRadius =
+                            dp(12).toFloat()
+                    }
             }
 
         overlayParams =
@@ -691,22 +756,21 @@ class SubtitleService : Service() {
                     Gravity.CENTER_HORIZONTAL
 
                 x =
-                    preferences
-                        .getInt(
-                            "overlay_x",
-                            0
-                        )
+                    preferences.getInt(
+                        "overlay_x",
+                        0
+                    )
 
                 y =
-                    preferences
-                        .getInt(
-                            "overlay_y",
-                            dp(300)
-                        )
+                    preferences.getInt(
+                        "overlay_y",
+                        dp(300)
+                    )
             }
 
         var downX = 0f
         var downY = 0f
+
         var startX = 0
         var startY = 0
 
@@ -717,9 +781,7 @@ class SubtitleService : Service() {
                     overlayParams
                         ?: return@setOnTouchListener false
 
-                when (
-                    event.action
-                ) {
+                when (event.action) {
 
                     MotionEvent.ACTION_DOWN -> {
 
@@ -745,24 +807,21 @@ class SubtitleService : Service() {
                                 (
                                     event.rawX -
                                         downX
-                                    )
-                                    .toInt()
+                                    ).toInt()
 
                         params.y =
                             startY +
                                 (
                                     event.rawY -
                                         downY
-                                    )
-                                    .toInt()
+                                    ).toInt()
 
                         try {
 
-                            windowManager
-                                .updateViewLayout(
-                                    overlayText,
-                                    params
-                                )
+                            windowManager.updateViewLayout(
+                                overlayText,
+                                params
+                            )
 
                         } catch (_: Exception) {
                         }
@@ -787,9 +846,8 @@ class SubtitleService : Service() {
                         true
                     }
 
-                    else -> {
+                    else ->
                         false
-                    }
                 }
             }
 
@@ -803,18 +861,16 @@ class SubtitleService : Service() {
         text: String
     ) {
 
-        overlayText
-            ?.post {
+        overlayText?.post {
 
-                if (
-                    text.isNotBlank()
-                ) {
+            if (
+                text.isNotBlank()
+            ) {
 
-                    overlayText
-                        ?.text =
-                        text
-                }
+                overlayText?.text =
+                    text
             }
+        }
     }
 
     private fun shutdown() {
@@ -823,9 +879,7 @@ class SubtitleService : Service() {
             false
 
         try {
-
             recorder?.stop()
-
         } catch (_: Exception) {
         }
 
@@ -833,12 +887,10 @@ class SubtitleService : Service() {
         recorder = null
 
         try {
-
             webSocket?.close(
                 1000,
                 "stop"
             )
-
         } catch (_: Exception) {
         }
 
@@ -848,9 +900,7 @@ class SubtitleService : Service() {
         translator = null
 
         try {
-
             projection?.stop()
-
         } catch (_: Exception) {
         }
 
@@ -859,11 +909,9 @@ class SubtitleService : Service() {
         overlayText?.let {
 
             try {
-
                 windowManager.removeView(
                     it
                 )
-
             } catch (_: Exception) {
             }
         }
@@ -898,7 +946,6 @@ class SubtitleService : Service() {
                 resources
                     .displayMetrics
                     .density
-            )
-            .toInt()
+            ).toInt()
     }
 }
